@@ -1,41 +1,44 @@
 package com.example.fmb.dailyselfie;
 
+import android.app.AlarmManager;
+import android.app.PendingIntent;
 import android.content.Intent;
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.SystemClock;
 import android.provider.MediaStore;
 import android.support.v7.app.AppCompatActivity;
 import android.util.Log;
-import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
 import android.widget.AdapterView;
-import android.widget.ArrayAdapter;
-import android.widget.Button;
-import android.widget.ImageView;
+import android.widget.BaseAdapter;
 import android.widget.ListView;
+import android.widget.Toast;
 
 import java.io.File;
 import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Date;
-import java.util.List;
 
 public class MainActivity extends AppCompatActivity {
 
-    String mCurrentPhotoPath;
     File photoFile = null;
     static final int REQUEST_TAKE_PHOTO = 1;
-    ImageView photoView;
 
     ListView lvPhotos;                  // ListView to display pictures
-    ArrayAdapter<String> lvPicAdapter;  // adapter for handle data of lvPhotos
+    BaseAdapter lvPicAdapter;  // adapter for handle data of lvPhotos
     ArrayList<String> listPic;          // List associated with lvPhotos
+
+    private AlarmManager mAlarmManager;
+    private Intent mNotificationReceiverIntent;
+    private PendingIntent mNotificationReceiverPendingIntent;
+
+    private static final long INITIAL_ALARM_DELAY = 2 * 60 * 1000L;
 
     static final int REQUEST_IMAGE_CAPTURE = 1;
     private final static String TAG = "fmbDailySelfie";
@@ -44,18 +47,28 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-        photoView = (ImageView) findViewById(R.id.photoView);
+        // setup the alarm
+        // Get the AlarmManager Service
+        mAlarmManager = (AlarmManager) getSystemService(ALARM_SERVICE);
+
+        // Create an Intent to broadcast to the AlarmNotificationReceiver
+        mNotificationReceiverIntent = new Intent(MainActivity.this,
+                AlarmNotificationReceiver.class);
+
+        // Create an PendingIntent that holds the NotificationReceiverIntent
+        mNotificationReceiverPendingIntent = PendingIntent.getBroadcast(
+                MainActivity.this, 0, mNotificationReceiverIntent, 0);
+        // Set up inexact repeating alarm
+        setAlarm();
 
         // create and attache the adapter to the Listview
         // Get the list of picture files
         File storageDir = Environment.getExternalStoragePublicDirectory(
                 Environment.DIRECTORY_PICTURES);
-        List<File> picFiles = getListFiles(storageDir);
+         listPic = getListFiles(storageDir); // get list of pictures order descending
 
         lvPhotos = (ListView) findViewById(R.id.lvPhotos);
-        // inflate the line that will be in the LineView
-        View v = LayoutInflater.from(this).inflate(R.layout.singlesmall_line, lvPhotos, false);
-        lvPicAdapter = new SpecialAdapter(this,R.layout.singlesmall_line, listPic);
+        lvPicAdapter = new ItemAdapter(this, listPic);
         lvPhotos.setAdapter(lvPicAdapter);
 
         // attach a listener to the ListView to react to item click events
@@ -67,21 +80,6 @@ public class MainActivity extends AppCompatActivity {
         });
 
 
-        Button btnGetLastPic = (Button) findViewById(R.id.btnGetLastPic);
-        btnGetLastPic.setOnClickListener(new View.OnClickListener() {
-            public  void onClick(View v) {
-                if(photoFile.exists()){
-
-                    Bitmap myBitmap = BitmapFactory.decodeFile(photoFile.getAbsolutePath());
-
-                    ImageView myImage = (ImageView) findViewById(R.id.photoView);
-
-                    myImage.setImageBitmap(myBitmap);
-
-                }
-
-            }
-        });
     }
     //  **************** Menu Processing
     @Override
@@ -116,9 +114,6 @@ public class MainActivity extends AppCompatActivity {
                 ".jpg",         /* suffix */
                 storageDir      /* directory */
         );
-        Log.e(TAG, "image:"+image.getName()+" "+image.getAbsolutePath()+" "+image.getCanonicalPath());
-        // Save a file: path for use with ACTION_VIEW intents
-        mCurrentPhotoPath = "file:" + image.getAbsolutePath();
 
         return image;
     }
@@ -148,32 +143,32 @@ public class MainActivity extends AppCompatActivity {
 
     }
 
+    // When the pic is taken, the file name is inserted in the list, sorted and refresh
       @Override
       protected void onActivityResult(int requestCode, int resultCode, Intent data) {
           if (requestCode == REQUEST_IMAGE_CAPTURE && resultCode == RESULT_OK) {
               if(photoFile.exists()){
-                Log.e(TAG, "PhotoFile existe, lo va a desplegar");
-                Bitmap myBitmap = BitmapFactory.decodeFile(photoFile.getAbsolutePath());
-                ImageView myImage = (ImageView) findViewById(R.id.photoView);
-                myImage.setImageBitmap(myBitmap);
+                    listPic.add((photoFile.getName())); // add the name to the list
+                    Collections.sort(listPic, Collections.reverseOrder());
+                    lvPicAdapter.notifyDataSetChanged();
             }
           }
       }
 
-    private List<File> getListFiles(File parentDir) {
-        ArrayList<File> inFiles = new ArrayList<File>();
-        listPic = new ArrayList<String>();
+    // get list of files with jpg extension, order descending
+    private ArrayList<String> getListFiles(File parentDir) {
+        ArrayList<String> inFiles = new ArrayList<String>();
         File[] files = parentDir.listFiles();
         for (File file : files) {
             if (file.isDirectory()) {
           //      inFiles.addAll(getListFiles(file));
             } else {
                 if(file.getName().endsWith(".jpg")){
-                    inFiles.add(file);
-                    listPic.add(file.getName());
+                    inFiles.add(file.getName());
                 }
             }
         }
+         Collections.sort(inFiles, Collections.reverseOrder());
         return inFiles;
     }
 
@@ -181,5 +176,20 @@ public class MainActivity extends AppCompatActivity {
         Intent myIntent = new Intent(this, PhotoActivity.class);
         myIntent.putExtra("Photo", listPic.get(index));
         startActivity(myIntent);
+    }
+
+    // Set up inexact repeating alarm
+    private void setAlarm() {
+        Log.e(TAG, "Enter setAlarm");
+        // Set inexact repeating alarm
+        mAlarmManager.setInexactRepeating(
+                AlarmManager.ELAPSED_REALTIME,
+                SystemClock.elapsedRealtime() + INITIAL_ALARM_DELAY,
+                INITIAL_ALARM_DELAY,
+                mNotificationReceiverPendingIntent);
+
+        Toast.makeText(getApplicationContext(),
+                "Inexact Repeating Alarm Set", Toast.LENGTH_LONG)
+                .show();
     }
 }
